@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { saveSettings, DEFAULT_SETTINGS, todayStr } from '../services/db';
+import { saveSettings, DEFAULT_SETTINGS, todayStr, addWeightEntry } from '../services/db';
+import { firebaseSaveInitialUserPersonalization, isFirebaseConfigured } from '../services/firebase';
 import {
   ArrowRight,
   ArrowLeft,
@@ -14,8 +15,9 @@ import {
   AlertCircle
 } from 'lucide-react';
 
-export default function GoalSetup({ onComplete }) {
+export default function GoalSetup({ onComplete, authUser }) {
   const [step, setStep] = useState(1);
+  const [savingCloud, setSavingCloud] = useState(false);
   const totalSteps = 7;
 
   // Step 2: Goal
@@ -129,7 +131,8 @@ export default function GoalSetup({ onComplete }) {
     setStep(prev => Math.min(totalSteps, prev + 1));
   }
 
-  function handleSaveFinal() {
+  async function handleSaveFinal() {
+    setSavingCloud(true);
     const transparent = calculateTransparentTargets();
     const finalSettings = {
       ...DEFAULT_SETTINGS,
@@ -161,7 +164,29 @@ export default function GoalSetup({ onComplete }) {
       fatGoal: transparent.fatGoal
     };
 
+    // 1. Save locally in device storage
     saveSettings(finalSettings);
+
+    // 2. Add baseline weight entry
+    try {
+      addWeightEntry({
+        weight: parseFloat(currentWeight) || 75,
+        unit,
+        note: 'Initial baseline weigh-in recorded during setup'
+      });
+    } catch {}
+
+    // 3. Persist to Firebase Cloud Firestore for this user
+    const userUid = authUser?.uid || authUser?.id;
+    if (userUid && isFirebaseConfigured()) {
+      try {
+        await firebaseSaveInitialUserPersonalization(userUid, finalSettings, authUser);
+      } catch (err) {
+        console.warn('[onboarding] Cloud save warning:', err.message);
+      }
+    }
+
+    setSavingCloud(false);
     onComplete(finalSettings);
   }
 
@@ -680,10 +705,11 @@ export default function GoalSetup({ onComplete }) {
               <button
                 type="button"
                 onClick={handleSaveFinal}
-                className="btn btn-primary text-xs shadow-sm"
+                disabled={savingCloud}
+                className="btn btn-primary text-xs shadow-sm flex items-center gap-1.5"
               >
-                <Check className="w-3.5 h-3.5" />
-                <span>Save Profile & Open Dashboard</span>
+                <Check className={`w-3.5 h-3.5 ${savingCloud ? 'animate-spin' : ''}`} />
+                <span>{savingCloud ? 'Connecting Firebase Database...' : 'Save Profile & Open Dashboard'}</span>
               </button>
             )}
           </div>

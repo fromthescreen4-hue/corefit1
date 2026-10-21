@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { getSettings, getAuthUser, saveAuthUser } from './services/db';
+import { getSettings, getAuthUser, saveAuthUser, restoreFromCloudNow } from './services/db';
 import {
   firebaseIsSignInWithEmailLink,
-  firebaseCompleteSignInWithEmailLink
+  firebaseCompleteSignInWithEmailLink,
+  fetchUserFromCloud,
+  isFirebaseConfigured
 } from './services/firebase';
 
 // Navigation & Layout
@@ -67,6 +69,39 @@ export default function App() {
     };
   }, []);
 
+  const [isSyncingUser, setIsSyncingUser] = useState(false);
+
+  // Core handler: determines if user is new or existing in Firebase Database
+  async function handleLoginSuccess(userRecord) {
+    saveAuthUser(userRecord);
+    setAuthUser(userRecord);
+
+    const userUid = userRecord?.uid || userRecord?.id;
+    if (userUid && isFirebaseConfigured()) {
+      setIsSyncingUser(true);
+      try {
+        const cloudData = await fetchUserFromCloud(userUid);
+        if (cloudData && cloudData.settings && cloudData.settings.onboardingComplete) {
+          // Existing athlete: Restore their saved goals, workouts, nutrition & metrics
+          await restoreFromCloudNow();
+          const restoredSettings = getSettings();
+          setSettings(restoredSettings);
+          setActiveView('dashboard');
+        } else {
+          // New athlete: Guide through personalization & setup wizard
+          try {
+            localStorage.removeItem('corefit_settings');
+          } catch {}
+          setSettings(null);
+        }
+      } catch (err) {
+        console.warn('[auth] Cloud sync verification notice:', err);
+      } finally {
+        setIsSyncingUser(false);
+      }
+    }
+  }
+
   // Auto-detect incoming Firebase Email Sign-in link
   useEffect(() => {
     if (typeof window !== 'undefined' && firebaseIsSignInWithEmailLink(window.location.href)) {
@@ -74,8 +109,7 @@ export default function App() {
       if (savedEmail) {
         firebaseCompleteSignInWithEmailLink(savedEmail)
           .then((userRecord) => {
-            saveAuthUser(userRecord);
-            setAuthUser(userRecord);
+            handleLoginSuccess(userRecord);
           })
           .catch((err) => {
             console.error('[auth] Auto email link sign-in error:', err);
@@ -95,6 +129,7 @@ export default function App() {
   }
 
   function handleResetApp() {
+    saveAuthUser(null);
     setAuthUser(null);
     setSettings(null);
     setActiveView('dashboard');
@@ -106,7 +141,19 @@ export default function App() {
 
   let content;
 
-  if (hash === '#/privacy') {
+  if (isSyncingUser) {
+    content = (
+      <div className="min-h-screen bg-[#F6F6F7] flex flex-col items-center justify-center p-6 text-center space-y-3">
+        <div className="w-9 h-9 border-2 border-[#FFAE00] border-t-transparent rounded-lg animate-spin" />
+        <p className="text-xs font-bold text-[#1A1D1F] uppercase tracking-wider">
+          Connecting to Firebase Database...
+        </p>
+        <p className="text-[11px] text-[#6F767E]">
+          Checking personalization profile
+        </p>
+      </div>
+    );
+  } else if (hash === '#/privacy') {
     content = <PrivacyPolicy />;
   } else if (hash === '#/terms') {
     content = <TermsAndConditions />;
@@ -124,10 +171,11 @@ export default function App() {
       />
     );
   } else if (!hasValidAuth) {
-    content = <AuthModal onLoginSuccess={(user) => setAuthUser(user)} />;
+    content = <AuthModal onLoginSuccess={handleLoginSuccess} />;
   } else if (!settings || !settings.onboardingComplete) {
     content = (
       <GoalSetup
+        authUser={authUser}
         onComplete={(newSettings) => {
           setSettings(newSettings);
           setActiveView('dashboard');

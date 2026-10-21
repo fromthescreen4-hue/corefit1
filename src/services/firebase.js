@@ -339,3 +339,90 @@ export async function fetchUserFromCloud(uid) {
     return null;
   }
 }
+
+
+/**
+ * Checks if a user has completed the onboarding and personalization setup in Firebase.
+ */
+export async function firebaseCheckUserOnboardingStatus(uid) {
+  if (!db || !uid) return { exists: false, onboardingComplete: false, data: null };
+  try {
+    const data = await fetchUserFromCloud(uid);
+    if (!data) return { exists: false, onboardingComplete: false, data: null };
+    const hasCompleted = Boolean(data.settings && data.settings.onboardingComplete);
+    return { exists: true, onboardingComplete: hasCompleted, data };
+  } catch (err) {
+    console.warn('[firebase] Error checking onboarding status:', err);
+    return { exists: false, onboardingComplete: false, data: null };
+  }
+}
+
+/**
+ * Initializes and persists the complete user personalization database document in Firebase Cloud Firestore.
+ */
+export async function firebaseSaveInitialUserPersonalization(uid, settingsPayload, profilePayload = {}) {
+  if (!db || !uid) return false;
+  try {
+    const userDocRef = doc(db, 'users', uid);
+    const initialDoc = {
+      profile: {
+        uid,
+        email: profilePayload.email || '',
+        displayName: profilePayload.displayName || 'Athlete',
+        photoURL: profilePayload.photoURL || null,
+        provider: profilePayload.provider || 'firebase',
+        createdAt: new Date().toISOString()
+      },
+      settings: settingsPayload,
+      personalization: {
+        goalType: settingsPayload.goalType,
+        startWeight: settingsPayload.startWeight,
+        goalWeight: settingsPayload.goalWeight,
+        height: settingsPayload.height,
+        heightUnit: settingsPayload.heightUnit || 'cm',
+        unit: settingsPayload.unit || 'kg',
+        age: settingsPayload.age,
+        gender: settingsPayload.gender,
+        activityLevel: settingsPayload.activityLevel,
+        experience: settingsPayload.experience,
+        trainingLocation: settingsPayload.trainingLocation,
+        equipment: settingsPayload.equipment || [],
+        dietaryPreference: settingsPayload.dietaryPreference,
+        cuisinePreferences: settingsPayload.cuisinePreferences || [],
+        completedAt: new Date().toISOString()
+      },
+      targets: {
+        calorieGoal: settingsPayload.calorieGoal,
+        proteinGoal: settingsPayload.proteinGoal,
+        carbsGoal: settingsPayload.carbsGoal,
+        fatGoal: settingsPayload.fatGoal,
+        stepGoal: settingsPayload.stepGoal,
+        waterGoal: settingsPayload.waterGoal,
+        workoutDaysGoal: settingsPayload.workoutDaysGoal
+      },
+      weightLog: [
+        {
+          id: 'init_wt_' + Date.now().toString(36),
+          date: new Date().toISOString().slice(0, 10),
+          time: new Date().toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' }),
+          weight: settingsPayload.startWeight,
+          unit: settingsPayload.unit || 'kg',
+          note: 'Initial baseline weigh-in recorded during setup'
+        }
+      ],
+      workouts: [],
+      nutritionLog: {},
+      waterLog: {},
+      movementLog: {},
+      habitsLog: {},
+      lastSyncedAt: new Date().toISOString(),
+      updatedAt: serverTimestamp()
+    };
+
+    await setDoc(userDocRef, initialDoc, { merge: true });
+    return true;
+  } catch (err) {
+    console.error('[firebase] Error initializing user personalization in Firestore:', err);
+    throw err;
+  }
+}
